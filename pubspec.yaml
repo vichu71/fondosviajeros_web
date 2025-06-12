@@ -40,7 +40,7 @@ dependencies:
   intl: ^0.19.0  # fechas y números
   fluttertoast: ^8.2.4  # notificaciones rápidas
   flutter_local_notifications: ^17.0.0  # notificaciones locales
-
+  google_fonts: ^6.1.0
 
 dev_dependencies:
   flutter_test:
