@@ -1,6 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
+
+import '../model/unirse_fondo_request.dart';
+import '../model/unirse_fondo_response.dart';
+import '../model/fondo.dart';
+import '../apirest/api_service.dart';
+import '../utils/logger.dart';
+import 'inicio_page.dart';
+import 'home_fondo_page.dart';
 
 class UnirseFondoPage extends StatefulWidget {
   const UnirseFondoPage({super.key});
@@ -11,6 +20,8 @@ class UnirseFondoPage extends StatefulWidget {
 
 class _UnirseFondoPageState extends State<UnirseFondoPage>
     with TickerProviderStateMixin {
+
+  final ApiService _apiService = ApiService();
   final _nombreUsuarioController = TextEditingController();
   final _codigoFondoController = TextEditingController();
   String? _error;
@@ -61,6 +72,36 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
     super.dispose();
   }
 
+  // Método para obtener o crear UUID del dispositivo
+  Future<String> _getOrCreateUuidDispositivo() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? uuid = prefs.getString('uuid_dispositivo');
+    if (uuid == null) {
+      uuid = const Uuid().v4();
+      await prefs.setString('uuid_dispositivo', uuid);
+      log('🆔 UUID del dispositivo creado: $uuid', type: LogType.info);
+    } else {
+      log('🆔 UUID del dispositivo existente: $uuid', type: LogType.info);
+    }
+    return uuid;
+  }
+
+  // Método actualizado para guardar datos del usuario
+  Future<void> _guardarDatosUsuario(UnirseFondoResponse response) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    Map<String, dynamic> userData = {
+      'userId': response.usuario.id.toString(),
+      'userName': response.usuario.nombre,
+      'fechaUltimoAcceso': DateTime.now().toIso8601String(),
+    };
+
+    await prefs.setString('userData', jsonEncode(userData));
+
+    log('✅ Datos de usuario guardados: ID=${response.usuario.id}, Nombre=${response.usuario.nombre}', type: LogType.success);
+  }
+
+  // Método principal actualizado
   Future<void> _unirseAFondo() async {
     final nombreUsuario = _nombreUsuarioController.text.trim();
     final codigoFondo = _codigoFondoController.text.trim();
@@ -76,110 +117,148 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
       _cargando = true;
     });
 
-    final url = Uri.parse('http://localhost:8080/api/fondos/unirse');
+    try {
+      // Obtener UUID del dispositivo
+      final uuid = await _getOrCreateUuidDispositivo();
 
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        "nombreUsuario": nombreUsuario,
-        "codigoFondo": codigoFondo,
-      }),
-    );
+      // Crear request
+      final request = UnirseFondoRequest(
+        nombreUsuario: nombreUsuario,
+        codigoFondo: codigoFondo,
+        uuidDispositivo: uuid,
+      );
 
-    setState(() => _cargando = false);
+      log('🚀 Intentando unirse al fondo: ${request.toString()}', type: LogType.info);
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final nombreFondo = data['fondo']['nombre'];
+      // Llamar al API
+      final response = await _apiService.unirseAFondo(request);
 
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => Dialog(
-          shape: RoundedRectangleBorder(
+      // Guardar datos del usuario
+      await _guardarDatosUsuario(response);
+
+      setState(() => _cargando = false);
+
+      // Mostrar dialog de éxito
+      _mostrarDialogExito(response.fondo, response.usuario.nombre);
+
+    } catch (e) {
+      setState(() => _cargando = false);
+
+      String mensajeError;
+      if (e.toString().contains('Conflicto')) {
+        mensajeError = "Oops! 😅 Ese nombre ya está pillado o el código no mola";
+      } else if (e.toString().contains('Fondo no encontrado')) {
+        mensajeError = "🤔 Ese código no existe, ¿seguro que está bien?";
+      } else if (e.toString().contains('Datos inválidos')) {
+        mensajeError = "📝 Revisa los datos que has puesto";
+      } else if (e.toString().contains('conexión')) {
+        mensajeError = "📡 No hay conexión, ¡revisa tu internet!";
+      } else {
+        mensajeError = "Algo ha petado 💥 ¡Inténtalo de nuevo!";
+      }
+
+      setState(() => _error = mensajeError);
+      _shakeController.forward().then((_) => _shakeController.reverse());
+
+      log('💥 Error al unirse al fondo: $e', type: LogType.error);
+    }
+  }
+
+  // Método para mostrar dialog de éxito (actualizado)
+  void _mostrarDialogExito(Fondo fondo, String nombreUsuario) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(25),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(25),
-          ),
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(25),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.green.shade400,
-                  Colors.teal.shade300,
-                ],
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Text(
-                    "🎉",
-                    style: TextStyle(fontSize: 50),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  "¡YAAAS! 🔥",
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  "¡Ya eres parte del squad! 🎊\n$nombreFondo",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.teal.shade700,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 12,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                  ),
-                  child: const Text(
-                    "¡Let's go! 🚀",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.green.shade400,
+                Colors.teal.shade300,
               ],
             ),
           ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Text(
+                  "🎉",
+                  style: TextStyle(fontSize: 50),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "¡YAAAS! 🔥",
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "¡Bienvenido al squad, $nombreUsuario! 🎊\n${fondo.nombre}",
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context); // Cerrar dialog
+
+                  // Navegar al fondo y limpiar el stack
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => HomeFondoPage(
+                        fondo: fondo,
+                      ),
+                    ),
+                        (route) => false,
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.teal.shade700,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(25),
+                  ),
+                ),
+                child: const Text(
+                  "¡Let's go! 🚀",
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-      );
-    } else if (response.statusCode == 409 || response.statusCode == 400) {
-      setState(() => _error = "Oops! 😅 Ese nombre ya está pillado o el código no mola");
-      _shakeController.forward().then((_) => _shakeController.reverse());
-    } else {
-      setState(() => _error = "Algo ha petado 💥 ¡Inténtalo de nuevo!");
-      _shakeController.forward().then((_) => _shakeController.reverse());
-    }
+      ),
+    );
   }
 
   @override
