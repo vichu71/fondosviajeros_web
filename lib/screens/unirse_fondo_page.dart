@@ -24,6 +24,11 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
   final ApiService _apiService = ApiService();
   final _nombreUsuarioController = TextEditingController();
   final _codigoFondoController = TextEditingController();
+
+  // ✅ AÑADIDO: Variables para manejar usuario existente
+  String? _nombreUsuario;
+  bool _loading = true;
+
   String? _error;
   bool _cargando = false;
 
@@ -61,6 +66,32 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
     ));
 
     _pulseController.repeat(reverse: true);
+
+    // ✅ AÑADIDO: Cargar usuario al inicializar
+    _cargarUsuario();
+  }
+
+  // ✅ AÑADIDO: Método para cargar usuario existente
+  Future<void> _cargarUsuario() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = prefs.getString('userData');
+
+    String? nombre;
+    if (jsonString != null) {
+      try {
+        final Map<String, dynamic> userMap = jsonDecode(jsonString);
+        nombre = userMap['userName'];
+      } catch (e) {
+        print('❌ Error al parsear userData: $e');
+      }
+    }
+
+    setState(() {
+      _nombreUsuario = nombre;
+      _loading = false;
+    });
+
+    print('🧠 Usuario cargado: $_nombreUsuario');
   }
 
   @override
@@ -101,11 +132,13 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
     log('✅ Datos de usuario guardados: ID=${response.usuario.id}, Nombre=${response.usuario.nombre}', type: LogType.success);
   }
 
-  // Método principal actualizado
+  // ✅ CORREGIDO: Método principal actualizado para usar usuario existente
   Future<void> _unirseAFondo() async {
-    final nombreUsuario = _nombreUsuarioController.text.trim();
+    // ✅ CAMBIO: Usar el nombre del usuario guardado o el del campo
+    final nombreUsuario = _nombreUsuario ?? _nombreUsuarioController.text.trim();
     final codigoFondo = _codigoFondoController.text.trim();
 
+    // ✅ CAMBIO: Validación mejorada
     if (nombreUsuario.isEmpty || codigoFondo.isEmpty) {
       setState(() => _error = "¡Oye! Necesito que rellenes todo 📝");
       _shakeController.forward().then((_) => _shakeController.reverse());
@@ -164,25 +197,26 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
     }
   }
 
-  // Método para mostrar dialog de éxito (actualizado)
+  // Método para mostrar dialog de éxito
   void _mostrarDialogExito(Fondo fondo, String nombreUsuario) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => Dialog(
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(25),
+          borderRadius: BorderRadius.circular(30),
         ),
         child: Container(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(25),
+            borderRadius: BorderRadius.circular(30),
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
                 Colors.green.shade400,
-                Colors.teal.shade300,
+                Colors.teal.shade400,
+                Colors.blue.shade300,
               ],
             ),
           ),
@@ -190,33 +224,101 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
-                decoration: const BoxDecoration(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      spreadRadius: 5,
+                      blurRadius: 15,
+                    ),
+                  ],
                 ),
                 child: const Text(
                   "🎉",
-                  style: TextStyle(fontSize: 50),
+                  style: TextStyle(fontSize: 60),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               const Text(
                 "¡YAAAS! 🔥",
                 style: TextStyle(
-                  fontSize: 24,
+                  fontSize: 26,
                   fontWeight: FontWeight.w900,
                   color: Colors.white,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Text(
-                "¡Bienvenido al squad, $nombreUsuario! 🎊\n${fondo.nombre}",
+                "¡Bienvenido al squad, $nombreUsuario! 🎊",
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 18,
                   color: Colors.white,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.3),
+                    width: 2,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      "Te has unido a:",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      fondo.nombre,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(15),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            spreadRadius: 1,
+                            blurRadius: 5,
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        "Código: ${fondo.codigo}",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.teal.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 24),
@@ -224,7 +326,7 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
                 onPressed: () {
                   Navigator.pop(context); // Cerrar dialog
 
-                  // Navegar al fondo y limpiar el stack
+                  // Navegación para unirse al fondo: Limpiar todo el stack
                   Navigator.pushAndRemoveUntil(
                     context,
                     MaterialPageRoute(
@@ -232,25 +334,26 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
                         fondo: fondo,
                       ),
                     ),
-                        (route) => false,
+                        (route) => false, // Limpiar completamente el stack
                   );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
                   foregroundColor: Colors.teal.shade700,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 12,
+                    horizontal: 40,
+                    vertical: 16,
                   ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(25),
                   ),
+                  elevation: 8,
                 ),
                 child: const Text(
                   "¡Let's go! 🚀",
                   style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
                   ),
                 ),
               ),
@@ -263,6 +366,30 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
 
   @override
   Widget build(BuildContext context) {
+    // ✅ AÑADIDO: Mostrar loading mientras carga usuario
+    if (_loading) {
+      return Scaffold(
+        body: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.blue.shade400,
+                Colors.purple.shade400,
+                Colors.pink.shade300,
+              ],
+            ),
+          ),
+          child: const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -353,7 +480,7 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
 
                       // Formulario con estilo
                       Container(
-                        padding: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.95),
                           borderRadius: BorderRadius.circular(20),
@@ -376,65 +503,107 @@ class _UnirseFondoPageState extends State<UnirseFondoPage>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Campo nombre
-                                  const Text(
-                                    "¿Cómo te llamas? 😎",
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(15),
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Colors.blue.shade50,
-                                          Colors.purple.shade50,
-                                        ],
-                                      ),
-                                      border: Border.all(
-                                        color: Colors.purple.shade200,
-                                        width: 2,
-                                      ),
-                                    ),
-                                    child: TextField(
-                                      controller: _nombreUsuarioController,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      decoration: InputDecoration(
-                                        hintText: "Tu nombre molón 🌟",
-                                        hintStyle: TextStyle(
-                                          color: Colors.grey.shade500,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.all(16),
-                                        prefixIcon: Container(
-                                          margin: const EdgeInsets.all(12),
-                                          padding: const EdgeInsets.all(8),
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              colors: [
-                                                Colors.blue.shade400,
-                                                Colors.purple.shade400,
-                                              ],
-                                            ),
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          child: const Text(
-                                            "👤",
-                                            style: TextStyle(fontSize: 16),
-                                          ),
+                                  // ✅ AÑADIDO: Saludo si ya existe usuario
+                                  if (_nombreUsuario != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 20.0),
+                                      child: Text(
+                                        'Hey $_nombreUsuario 👋',
+                                        style: const TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.black87,
                                         ),
                                       ),
+                                    ),
+
+                                  // Título del formulario
+                                  Center(
+                                    child: Column(
+                                      children: [
+                                        const Text(
+                                          "¡Join the crew! 🔥",
+                                          style: TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.w900,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          "Únete a la aventura épica ⚡",
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.grey.shade600,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                   const SizedBox(height: 20),
+
+                                  // ✅ CORREGIDO: Campo nombre solo si no hay usuario guardado
+                                  if (_nombreUsuario == null) ...[
+                                    const Text(
+                                      "¿Cómo te llamas? 😎",
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(15),
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Colors.blue.shade50,
+                                            Colors.purple.shade50,
+                                          ],
+                                        ),
+                                        border: Border.all(
+                                          color: Colors.purple.shade200,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: TextField(
+                                        controller: _nombreUsuarioController,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        decoration: InputDecoration(
+                                          hintText: "Tu nombre molón 🌟",
+                                          hintStyle: TextStyle(
+                                            color: Colors.grey.shade500,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.all(16),
+                                          prefixIcon: Container(
+                                            margin: const EdgeInsets.all(12),
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                colors: [
+                                                  Colors.blue.shade400,
+                                                  Colors.purple.shade400,
+                                                ],
+                                              ),
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            child: const Text(
+                                              "👤",
+                                              style: TextStyle(fontSize: 16),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                  ],
 
                                   // Campo código
                                   const Text(

@@ -13,6 +13,7 @@ import 'home_fondo_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
+import 'package:share_plus/share_plus.dart';
 
 
 
@@ -110,37 +111,96 @@ class _CrearFondoPageState extends State<CrearFondoPage>
   }
 
   Future<String> _getOrCreateUuidDispositivo() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? uuid = prefs.getString('uuid_dispositivo');
-    if (uuid == null) {
-      uuid = const Uuid().v4();
-      await prefs.setString('uuid_dispositivo', uuid);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? uuid = prefs.getString('uuid_dispositivo');
+
+      if (uuid == null || uuid.isEmpty) {
+        uuid = const Uuid().v4();
+        final success = await prefs.setString('uuid_dispositivo', uuid);
+
+        if (!success) {
+          throw Exception('Error al guardar UUID del dispositivo');
+        }
+
+        log('🆔 UUID del dispositivo creado: $uuid', type: LogType.info);
+      } else {
+        log('🆔 UUID del dispositivo existente: $uuid', type: LogType.info);
+      }
+
+      return uuid;
+    } catch (e) {
+      log('❌ Error al manejar UUID del dispositivo: $e', type: LogType.error);
+      // Fallback: generar UUID temporal (no persistente)
+      return const Uuid().v4();
     }
-    return uuid;
-  }
-  @override
-  void dispose() {
-    _sparkleController.dispose();
-    _shakeController.dispose();
-    _floatController.dispose();
-    _nombreUsuarioController.dispose();
-    _nombreFondoController.dispose();
-    super.dispose();
   }
   Future<void> _guardarDatosUsuario(CrearFondoResponse response) async {
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    // Solo guardamos datos esenciales del usuario
-    Map<String, dynamic> userData = {
-      'userId': response.usuario.id.toString(),
-      'userName': response.usuario.nombre,
-      'fechaUltimoAcceso': DateTime.now().toIso8601String(),
-    };
+      // ✅ VERIFICAR que los datos existen antes de guardar
+      if (response.usuario == null || response.usuario.id == null || response.usuario.nombre.isEmpty) {
+        throw Exception('Datos de usuario inválidos en la respuesta del servidor');
+      }
 
-    await prefs.setString('userData', jsonEncode(userData));
+      // Solo guardamos datos esenciales del usuario
+      Map<String, dynamic> userData = {
+        'userId': response.usuario.id.toString(),
+        'userName': response.usuario.nombre,
+        'fechaUltimoAcceso': DateTime.now().toIso8601String(),
+      };
 
-    // Log para debugging
-    log('✅ Datos de usuario guardados: ID=${response.usuario.id}, Nombre=${response.usuario.nombre}',type:  LogType.success);
+      log('💾 Guardando datos del usuario:', type: LogType.info);
+      log('   - User ID: ${userData['userId']}', type: LogType.info);
+      log('   - User Name: ${userData['userName']}', type: LogType.info);
+      log('   - Fecha: ${userData['fechaUltimoAcceso']}', type: LogType.info);
+
+      final success = await prefs.setString('userData', jsonEncode(userData));
+
+      if (!success) {
+        throw Exception('Error al escribir en SharedPreferences');
+      }
+
+      // ✅ VERIFICAR que se guardó correctamente
+      final verificacion = prefs.getString('userData');
+      if (verificacion == null) {
+        throw Exception('Verificación falló: datos no encontrados después de guardar');
+      }
+
+      log('✅ Datos de usuario guardados exitosamente', type: LogType.success);
+      log('   - Verificación: ${verificacion.substring(0, 50)}...', type: LogType.info);
+
+    } catch (e) {
+      log('❌ ERROR CRÍTICO al guardar datos del usuario: $e', type: LogType.error);
+
+      // Mostrar error al usuario
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Text("⚠️", style: TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Error al guardar datos: $e",
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+
+      // Re-lanzar la excepción para que el caller lo sepa
+      rethrow;
+    }
   }
   Future<void> _crearFondo() async {
     final nombreUsuario = _nombreUsuario ?? _nombreUsuarioController.text.trim();
@@ -165,21 +225,33 @@ class _CrearFondoPageState extends State<CrearFondoPage>
         uuidDispositivo: uuid,
       );
 
+      log('🚀 Enviando request para crear fondo: $request', type: LogType.api);
+
       CrearFondoResponse response = await _apiService.crearFondo(request);
 
+      log('✅ Respuesta recibida del servidor:', type: LogType.success);
+      log('   - Fondo ID: ${response.fondo.id}', type: LogType.info);
+      log('   - Fondo nombre: ${response.fondo.nombre}', type: LogType.info);
+      log('   - Usuario ID: ${response.usuario.id}', type: LogType.info);
+      log('   - Usuario nombre: ${response.usuario.nombre}', type: LogType.info);
+
+      // ✅ IMPORTANTE: Guardar datos del usuario ANTES de mostrar el diálogo
       await _guardarDatosUsuario(response);
+
       setState(() => _cargando = false);
 
       _mostrarDialogExito(response.fondo, nombreFondo);
+
     } catch (e) {
       setState(() => _cargando = false);
       final mensaje = e.toString().contains('409') || e.toString().contains('400')
           ? "Ese nombre ya está pillado! 😅 Prueba otro"
           : "Algo ha petado 💥 ¡Inténtalo otra vez!";
       _mostrarError(mensaje);
-      print('Error al crear fondo: $e');
+      log('💥 Error al crear fondo: $e', type: LogType.error);
     }
   }
+
 
 
   void _mostrarError(String mensaje) {
@@ -187,6 +259,8 @@ class _CrearFondoPageState extends State<CrearFondoPage>
     _shakeController.forward().then((_) => _shakeController.reverse());
   }
 
+
+  // ✅ MÉTODO ACTUALIZADO: _mostrarDialogExito con botón de compartir
 
   void _mostrarDialogExito(Fondo fondo, String nombreFondo) {
     showDialog(
@@ -335,46 +409,153 @@ class _CrearFondoPageState extends State<CrearFondoPage>
                 ),
               ),
               const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context); // Cerrar dialog
 
-                  // Navegar a HomeFondoPage y limpiar el stack
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => HomeFondoPage(
-                        fondo: fondo, // Pasamos el objeto fondo completo
+              // ✅ NUEVO: Botones de acción (Compartir + Vamos allá)
+              Column(
+                children: [
+                  // Botón Compartir
+                  Container(
+                    width: double.infinity,
+                    height: 50,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: ElevatedButton(
+                      onPressed: () => _compartirCodigo(fondo, nombreFondo),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                        foregroundColor: Colors.white,
+                        side: BorderSide(color: Colors.white.withOpacity(0.4), width: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text("📤", style: TextStyle(fontSize: 16)),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            "Compartir código",
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text("📱", style: TextStyle(fontSize: 14)),
+                        ],
                       ),
                     ),
-                        (route) => false, // Esto limpia todo el stack de navegación
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.purple.shade700,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 40,
-                    vertical: 16,
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(25),
+
+                  // Botón Vamos allá (principal)
+                  Container(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Cerrar dialog
+
+                        // Navegación para crear fondo: Preservar solo InicioPage en el stack
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => HomeFondoPage(
+                              fondo: fondo, // Pasamos el objeto fondo completo
+                            ),
+                          ),
+                          // Preservar solo InicioPage en el stack
+                              (route) => route.settings.name == '/' || route.toString().contains('InicioPage'),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.purple.shade700,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 40,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: 8,
+                      ),
+                      child: const Text(
+                        "¡Vamos allá! 🚀",
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
                   ),
-                  elevation: 8,
-                ),
-                child: const Text(
-                  "¡Vamos allá! 🚀",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 18,
-                  ),
-                ),
+                ],
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+// ✅ NUEVO: Método para compartir el código del fondo
+  void _compartirCodigo(Fondo fondo, String nombreFondo) async {
+    try {
+      final mensaje = '''🎒✈️ ¡Únete a mi squad de viaje!
+
+🎯 Fondo: $nombreFondo
+🔑 Código: ${fondo.codigo}
+
+¡Descárgate FondosViajeros y únete usando este código! Vamos a hacer realidad esta aventura juntos 🌟
+
+#SquadGoals #ViajeEnGrupo #FondosViajeros''';
+
+      // Usar el paquete share_plus para compartir
+      await Share.share(
+        mensaje,
+        subject: '¡Únete a mi fondo de viaje: $nombreFondo!',
+      );
+
+      // Log para debugging
+      log('📤 Código compartido: ${fondo.codigo}', type: LogType.info);
+
+    } catch (e) {
+      log('❌ Error al compartir: $e', type: LogType.error);
+
+      // Fallback: copiar al portapapeles
+      Clipboard.setData(ClipboardData(text: fondo.codigo.toString()));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Text("📋", style: TextStyle(fontSize: 16)),
+                SizedBox(width: 8),
+                Text(
+                  "Código copiado al portapapeles",
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.blue.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
   }
 
   @override

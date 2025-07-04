@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../model/fondo.dart';
 import '../model/movimiento.dart';
+import '../model/usuario.dart';
 import '../apirest/api_service.dart';
 import '../utils/logger.dart';
 import 'crear_movimiento_page.dart';
@@ -38,6 +39,11 @@ class _HomeFondoPageState extends State<HomeFondoPage>
   final int _pageSize = 20;
   String? _error;
 
+  // Variables para administración
+  Usuario? _usuarioActual;
+  bool _esAdminDelFondo = false;
+  bool _isLoadingAdmin = false;
+
   // Animaciones
   late AnimationController _shimmerController;
   late Animation<double> _shimmerAnimation;
@@ -49,6 +55,7 @@ class _HomeFondoPageState extends State<HomeFondoPage>
     _initAnimations();
     _scrollController.addListener(_scrollListener);
     _cargarDatosIniciales();
+    _cargarUsuarioActual(); // Cargar usuario para verificar admin
   }
 
   @override
@@ -80,6 +87,53 @@ class _HomeFondoPageState extends State<HomeFondoPage>
     ));
 
     _shimmerController.repeat();
+  }
+
+  // Cargar usuario actual y verificar si es admin
+  Future<void> _cargarUsuarioActual() async {
+    setState(() {
+      _isLoadingAdmin = true;
+    });
+
+    try {
+      log('🔍 Cargando usuario actual...', type: LogType.info);
+
+      // Intentar obtener el usuario del ApiService
+      Usuario? usuario = await _apiService.getUser();
+
+      // Si no está disponible, obtener de SharedPreferences
+      if (usuario == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final userDataString = prefs.getString('userData');
+
+        if (userDataString != null) {
+          final userData = jsonDecode(userDataString);
+          final userId = int.parse(userData['userId']);
+          usuario = await _apiService.getUsuarioById(userId);
+        }
+      }
+
+      if (usuario != null) {
+        setState(() {
+          _usuarioActual = usuario;
+        });
+
+        // Verificar si es admin de este fondo específico
+        final esAdmin = await _apiService.isUsuarioAdminOfFondo(usuario.id!, fondoId);
+
+        setState(() {
+          _esAdminDelFondo = esAdmin;
+        });
+
+        log('👤 Usuario: ${usuario.nombre} - Admin del fondo: $esAdmin', type: LogType.info);
+      }
+    } catch (e) {
+      log('❌ Error al cargar usuario: $e', type: LogType.error);
+    } finally {
+      setState(() {
+        _isLoadingAdmin = false;
+      });
+    }
   }
 
   // Listener para scroll infinito
@@ -268,14 +322,40 @@ class _HomeFondoPageState extends State<HomeFondoPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  nombreFondo,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        nombreFondo,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    // Mostrar badge de admin si corresponde
+                    if (_esAdminDelFondo) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.yellow.shade200,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.yellow.shade400, width: 1),
+                        ),
+                        child: Text(
+                          "👑 ADMIN",
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.yellow.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 Text(
                   "Código: $codigoFondo • $totalMiembros miembros",
@@ -288,29 +368,436 @@ class _HomeFondoPageState extends State<HomeFondoPage>
               ],
             ),
           ),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.3),
+          // Botón de opciones (solo para admins)
+          if (_esAdminDelFondo)
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.3),
+                ),
+              ),
+              child: IconButton(
+                onPressed: _mostrarMenuAdmin,
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
             ),
-            child: IconButton(
-              onPressed: () {
-                // TODO: Implementar opciones
-              },
-              icon: const Icon(
-                Icons.more_vert,
-                color: Colors.white,
-                size: 20,
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
+
+  // Mostrar menú de administración
+  void _mostrarMenuAdmin() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(25),
+            topRight: Radius.circular(25),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle del modal
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Header del menú
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.yellow.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      "👑",
+                      style: const TextStyle(fontSize: 20),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Opciones de Administrador",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        Text(
+                          "Gestiona el fondo y sus miembros",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Opciones del menú
+            _buildOpcionMenu(
+              Icons.person_add,
+              "Añadir usuario",
+              "Invita a alguien al fondo",
+              Colors.blue,
+                  () {
+                Navigator.pop(context);
+                _mostrarDialogoCrearUsuario();
+              },
+            ),
+
+            _buildOpcionMenu(
+              Icons.people,
+              "Gestionar miembros",
+              "Ver y administrar usuarios",
+              Colors.purple,
+                  () {
+                Navigator.pop(context);
+                // TODO: Implementar gestión de miembros
+                _mostrarSnackBar("Funcionalidad próximamente ⚙️");
+              },
+            ),
+
+            _buildOpcionMenu(
+              Icons.settings,
+              "Configuración del fondo",
+              "Cambiar nombre, código, etc.",
+              Colors.grey,
+                  () {
+                Navigator.pop(context);
+                // TODO: Implementar configuración
+                _mostrarSnackBar("Funcionalidad próximamente ⚙️");
+              },
+            ),
+
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOpcionMenu(
+      IconData icono,
+      String titulo,
+      String subtitulo,
+      MaterialColor color,
+      VoidCallback onTap,
+      ) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(
+          icono,
+          color: color.shade600,
+          size: 24,
+        ),
+      ),
+      title: Text(
+        titulo,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: Colors.black87,
+        ),
+      ),
+      subtitle: Text(
+        subtitulo,
+        style: TextStyle(
+          fontSize: 12,
+          color: Colors.grey.shade600,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+    );
+  }
+
+  // Mostrar diálogo para crear usuario
+  void _mostrarDialogoCrearUsuario() {
+    final TextEditingController nombreController = TextEditingController();
+    String rolSeleccionado = "USER";
+    bool isCreating = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade100,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.person_add,
+                  color: Colors.blue,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  "Añadir usuario al fondo",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Nombre del usuario:",
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nombreController,
+                decoration: InputDecoration(
+                  hintText: "Ej: María García",
+                  prefixIcon: const Icon(Icons.person, color: Colors.blue),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.blue.shade300),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                  ),
+                ),
+                textCapitalization: TextCapitalization.words,
+                enabled: !isCreating,
+              ),
+              const SizedBox(height: 16),
+
+              const Text(
+                "Rol en el fondo:",
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.blue.shade300),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    RadioListTile<String>(
+                      title: const Row(
+                        children: [
+                          Text("👤", style: TextStyle(fontSize: 16)),
+                          SizedBox(width: 8),
+                          Text(
+                            "Usuario",
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      subtitle: const Text(
+                        "Puede ver y añadir movimientos",
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: "USER",
+                      groupValue: rolSeleccionado,
+                      onChanged: isCreating ? null : (value) {
+                        setDialogState(() {
+                          rolSeleccionado = value!;
+                        });
+                      },
+                    ),
+                    const Divider(height: 1),
+                    RadioListTile<String>(
+                      title: const Row(
+                        children: [
+                          Text("👑", style: TextStyle(fontSize: 16)),
+                          SizedBox(width: 8),
+                          Text(
+                            "Administrador",
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      subtitle: const Text(
+                        "Control total del fondo y usuarios",
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: "ADMIN",
+                      groupValue: rolSeleccionado,
+                      onChanged: isCreating ? null : (value) {
+                        setDialogState(() {
+                          rolSeleccionado = value!;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isCreating ? null : () => Navigator.pop(context),
+              child: Text(
+                "Cancelar",
+                style: TextStyle(
+                  color: isCreating ? Colors.grey : Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: isCreating ? null : () async {
+                if (nombreController.text.trim().isEmpty) {
+                  _mostrarSnackBar("Por favor ingresa un nombre");
+                  return;
+                }
+
+                setDialogState(() {
+                  isCreating = true;
+                });
+
+                try {
+                  await _crearUsuarioEnFondo(
+                    nombreController.text.trim(),
+                    rolSeleccionado,
+                  );
+
+                  Navigator.pop(context);
+                  _mostrarSnackBar("Usuario creado exitosamente! 🎉");
+
+                } catch (e) {
+                  _mostrarSnackBar("Error al crear usuario: $e");
+                } finally {
+                  setDialogState(() {
+                    isCreating = false;
+                  });
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: isCreating
+                  ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              )
+                  : const Text(
+                "Crear usuario",
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Crear usuario en el fondo
+  Future<void> _crearUsuarioEnFondo(String nombre, String rol) async {
+    try {
+      log('👤 Creando usuario: $nombre con rol: $rol en fondo: $fondoId', type: LogType.info);
+
+      // Llamar al método del ApiService
+      final usuario = await _apiService.crearUsuarioEnFondo(
+        fondoId: fondoId,
+        nombre: nombre,
+        rol: rol,
+      );
+
+      log('✅ Usuario creado exitosamente: ${usuario.nombre} (ID: ${usuario.id})', type: LogType.success);
+
+      // Recargar datos para actualizar el conteo de miembros si es necesario
+      // await _cargarDatosIniciales();
+
+    } catch (e) {
+      log('❌ Error al crear usuario: $e', type: LogType.error);
+      rethrow;
+    }
+  }
+
+  void _mostrarSnackBar(String mensaje) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          mensaje,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  // ... resto de métodos (sin cambios) ...
 
   Widget _buildMontoCard() {
     return Container(

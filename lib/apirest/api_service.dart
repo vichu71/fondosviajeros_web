@@ -171,6 +171,33 @@ class ApiService {
       throw Exception('Error de red al obtener usuario: $e');
     }
   }
+  Future<Usuario?> buscarUsuarioEnFondo(int fondoId, String nombre) async {
+    final url = Uri.parse('$baseUrl/api/fondos/$fondoId/usuarios/buscar?nombre=${Uri.encodeComponent(nombre)}');
+    log('🔍 [GET] Buscando usuario "$nombre" en fondo ID $fondoId: $url', type: LogType.api);
+
+    try {
+      final response = await http.get(url);
+
+      log('📥 [RESPONSE] Status: ${response.statusCode}', type: LogType.api);
+      log('📥 [RESPONSE] Body: ${response.body}', type: LogType.api);
+
+      if (response.statusCode == 200) {
+        final usuario = Usuario.fromJson(jsonDecode(response.body));
+        log('✅ Usuario encontrado: ${usuario.nombre} (ID: ${usuario.id}) en fondo $fondoId', type: LogType.success);
+        return usuario;
+      } else if (response.statusCode == 404) {
+        log('⚠️ Usuario "$nombre" no encontrado en fondo $fondoId', type: LogType.warning);
+        return null; // Usuario no encontrado, retornar null en lugar de excepción
+      } else {
+        log('❌ Error al buscar usuario: ${response.statusCode} - ${response.body}', type: LogType.error);
+        throw Exception('Error al buscar usuario "$nombre" en fondo $fondoId');
+      }
+    } catch (e) {
+      log('💥 Excepción en buscarUsuarioEnFondo: $e', type: LogType.error);
+      throw Exception('Error de red al buscar usuario: $e');
+    }
+  }
+
 
   Future<Usuario> crearUsuario(UsuarioEditable usuario) async {
     final url = Uri.parse('$baseUrl/api/usuarios');
@@ -312,6 +339,29 @@ class ApiService {
       }
     } catch (e) {
       log('💥 Excepción en getFondoById: $e', type: LogType.error);
+      throw Exception('Error de red al obtener fondo: $e');
+    }
+  }
+  Future<Fondo> getFondoByCodigo(String codigo) async {
+    final url = Uri.parse('$baseUrl/api/fondos/codigo/$codigo');
+    log('🚀 [GET] Solicitando fondo por CODIGO: $url', type: LogType.api);
+
+    try {
+      final response = await http.get(url);
+
+      log('📥 [RESPONSE] Status: ${response.statusCode}', type: LogType.api);
+      log('📥 [RESPONSE] Body: ${response.body}', type: LogType.api);
+
+      if (response.statusCode == 200) {
+        final fondo = Fondo.fromJson(jsonDecode(response.body));
+        log('✅ Fondo obtenido: ${fondo.nombre} (ID: ${fondo.id})', type: LogType.success);
+        return fondo;
+      } else {
+        log('❌ Error al obtener fondo: ${response.statusCode} - ${response.body}', type: LogType.error);
+        throw Exception('Error al obtener fondo con codigo $codigo');
+      }
+    } catch (e) {
+      log('💥 Excepción en getFondoByCodigo: $e', type: LogType.error);
       throw Exception('Error de red al obtener fondo: $e');
     }
   }
@@ -607,7 +657,7 @@ class ApiService {
 
     try {
       final url = Uri.parse('$baseUrl/api/fondos/unirse');
-
+      log('🚀 [GET] Solicitando unirseAFondo: $url', type: LogType.api);
       final response = await http.post(
         url,
         headers: {
@@ -660,7 +710,7 @@ class ApiService {
 
     try {
       final url = Uri.parse('$baseUrl/api/fondos/usuarios/$userId?page=$page&size=$size');
-
+      log('🚀 [GET] Solicitando getFondosByUsuario: $url', type: LogType.api);
       final response = await http.get(
         url,
         headers: {
@@ -696,4 +746,160 @@ class ApiService {
     }
   }
 
+
+
+  Future<List<Usuario>> getUsuariosByFondoId(int fondoId) async {
+    log('🚀 Obteniendo usuarios del fondo ID: $fondoId', type: LogType.api);
+
+    try {
+
+      final url = Uri.parse('$baseUrl/api/usuarios/fondos/$fondoId');
+      log('🚀 [GET] Solicitando getUsuariosByFondoId: $url', type: LogType.api);
+      final response = await http.get(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      log('📨 Respuesta recibida - Status: ${response.statusCode}', type: LogType.api);
+
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
+
+        // Tu endpoint devuelve directamente la lista, no hay paginación
+        final List<dynamic> usuariosJson = responseData as List<dynamic>;
+        final usuarios = usuariosJson.map((json) => Usuario.fromJson(json)).toList();
+
+        log('✅ Usuarios del fondo cargados: ${usuarios.length} elementos', type: LogType.success);
+
+        // Log detallado de usuarios
+        for (var usuario in usuarios) {
+          log('👤 Usuario: ${usuario.nombre} (ID: ${usuario.id})', type: LogType.info);
+        }
+
+        return usuarios;
+      } else {
+        throw Exception('Error del servidor: ${response.statusCode}');
+      }
+    } catch (e) {
+      log('💥 Error al obtener usuarios del fondo: $e', type: LogType.error);
+      if (e is Exception) {
+        rethrow;
+      } else {
+        throw Exception('Error de conexión: No se pudo conectar con el servidor');
+      }
+    }
+  }
+
+
+  Future<bool> isUsuarioAdminOfFondo(int usuarioId, int fondoId) async {
+    log('👑 Verificando si usuario $usuarioId es admin del fondo $fondoId', type: LogType.api);
+
+    try {
+      final url = Uri.parse('$baseUrl/api/usuarios/$usuarioId/fondos/$fondoId/es-admin');
+      log('🚀 [GET] Solicitando isUsuarioAdminOfFondo: $url', type: LogType.api);
+      final response = await http.get(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      log('📨 Respuesta recibida - Status: ${response.statusCode}', type: LogType.api);
+
+      if (response.statusCode == 200) {
+        final isAdmin = response.body.toLowerCase() == 'true';
+
+        log('${isAdmin ? "✅" : "❌"} Usuario ${isAdmin ? "ES" : "NO ES"} admin del fondo',
+            type: isAdmin ? LogType.success : LogType.info);
+
+        return isAdmin;
+      } else {
+        throw Exception('Error del servidor: ${response.statusCode}');
+      }
+    } catch (e) {
+      log('💥 Error al verificar rol de admin: $e', type: LogType.error);
+      return false; // Por seguridad, asumir que no es admin si hay error
+    }
+  }
+
+
+  Future<String?> getRolUsuarioEnFondo(int usuarioId, int fondoId) async {
+    log('🔍 Obteniendo rol del usuario $usuarioId en fondo $fondoId', type: LogType.api);
+
+    try {
+      final url = Uri.parse('$baseUrl/api/usuarios/$usuarioId/fondos/$fondoId/rol');
+      log('🚀 [GET] Solicitando getRolUsuarioEnFondo: $url', type: LogType.api);
+      final response = await http.get(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      log('📨 Respuesta recibida - Status: ${response.statusCode}', type: LogType.api);
+
+      if (response.statusCode == 200) {
+        final rol = response.body.replaceAll('"', ''); // Remover comillas si las hay
+
+        log('✅ Rol obtenido: $rol', type: LogType.success);
+
+        return rol.isNotEmpty ? rol : null;
+      } else {
+        throw Exception('Error del servidor: ${response.statusCode}');
+      }
+    } catch (e) {
+      log('💥 Error al obtener rol: $e', type: LogType.error);
+      return null;
+    }
+  }
+
+  /**
+   * Crea un nuevo usuario y lo asigna directamente a un fondo con el rol especificado
+   */
+  Future<Usuario> crearUsuarioEnFondo({
+    required int fondoId,
+    required String nombre,
+    required String rol, // "ADMIN" o "USER"
+  }) async {
+    log('👤 Creando usuario "$nombre" con rol "$rol" en fondo $fondoId', type: LogType.api);
+
+    try {
+      final url = Uri.parse('$baseUrl/api/fondos/$fondoId/usuarios');
+      log('🚀 [GET] Solicitando crearUsuarioEnFondo: $url', type: LogType.api);
+      final requestBody = {
+        'nombre': nombre,
+        'rol': rol,
+      };
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(requestBody),
+      );
+
+      log('📨 Respuesta recibida - Status: ${response.statusCode}', type: LogType.api);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final responseData = jsonDecode(response.body);
+        final usuario = Usuario.fromJson(responseData);
+
+        log('✅ Usuario creado exitosamente: ${usuario.nombre} (ID: ${usuario.id})', type: LogType.success);
+
+        return usuario;
+      } else {
+        throw Exception('Error del servidor: ${response.statusCode}');
+      }
+    } catch (e) {
+      log('💥 Error al crear usuario en fondo: $e', type: LogType.error);
+      if (e is Exception) {
+        rethrow;
+      } else {
+        throw Exception('Error de conexión: No se pudo conectar con el servidor');
+      }
+    }
+  }
 }
