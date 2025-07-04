@@ -41,10 +41,18 @@ dependencies:
   fluttertoast: ^8.2.4  # notificaciones rápidas
   flutter_local_notifications: ^17.0.0  # notificaciones locales
   google_fonts: ^6.1.0
-
+  shared_preferences: ^2.2.2
+  dio: ^5.2.1
+  permission_handler: ^11.1.0
+  mime: ^1.0.0
+  json_annotation: ^4.6.0
+  uuid: 4.5.1
+  share_plus: ^7.2.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  build_runner: ^2.4.0
+  json_serializable: ^6.6.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

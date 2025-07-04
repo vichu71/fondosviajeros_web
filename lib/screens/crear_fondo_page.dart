@@ -1,7 +1,21 @@
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+
+import '../apirest/api_service.dart';
+import '../model/crear_fondo_request.dart';
+import '../model/crear_fondo_response.dart';
+import '../model/fondo.dart';
+import '../model/usuario.dart';
+import '../utils/logger.dart';
+import 'home_fondo_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
+import 'package:share_plus/share_plus.dart';
+
+
 
 class CrearFondoPage extends StatefulWidget {
   const CrearFondoPage({super.key});
@@ -12,8 +26,13 @@ class CrearFondoPage extends StatefulWidget {
 
 class _CrearFondoPageState extends State<CrearFondoPage>
     with TickerProviderStateMixin {
-  final _nombreUsuarioController = TextEditingController();
-  final _nombreFondoController = TextEditingController();
+
+  String? _nombreUsuario;
+  bool _loading = true;
+  TextEditingController _nombreFondoController = TextEditingController();
+  TextEditingController _nombreUsuarioController = TextEditingController();
+  final ApiService _apiService = ApiService();
+
   String? _error;
   bool _cargando = false;
 
@@ -27,6 +46,11 @@ class _CrearFondoPageState extends State<CrearFondoPage>
   @override
   void initState() {
     super.initState();
+    _initAnimations();
+    _cargarUsuario();
+  }
+
+  void _initAnimations() {
     _sparkleController = AnimationController(
       duration: const Duration(seconds: 3),
       vsync: this,
@@ -64,24 +88,126 @@ class _CrearFondoPageState extends State<CrearFondoPage>
     _sparkleController.repeat();
     _floatController.repeat(reverse: true);
   }
+  Future<void> _cargarUsuario() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = prefs.getString('userData');
 
-  @override
-  void dispose() {
-    _sparkleController.dispose();
-    _shakeController.dispose();
-    _floatController.dispose();
-    _nombreUsuarioController.dispose();
-    _nombreFondoController.dispose();
-    super.dispose();
+    String? nombre;
+    if (jsonString != null) {
+      try {
+        final Map<String, dynamic> userMap = jsonDecode(jsonString);
+        nombre = userMap['userName'];
+      } catch (e) {
+        print('❌ Error al parsear userData: $e');
+      }
+    }
+
+    setState(() {
+      _nombreUsuario = nombre;
+      _loading = false;
+    });
+
+    print('🧠 Usuario cargado: $_nombreUsuario');
   }
 
+  Future<String> _getOrCreateUuidDispositivo() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? uuid = prefs.getString('uuid_dispositivo');
+
+      if (uuid == null || uuid.isEmpty) {
+        uuid = const Uuid().v4();
+        final success = await prefs.setString('uuid_dispositivo', uuid);
+
+        if (!success) {
+          throw Exception('Error al guardar UUID del dispositivo');
+        }
+
+        log('🆔 UUID del dispositivo creado: $uuid', type: LogType.info);
+      } else {
+        log('🆔 UUID del dispositivo existente: $uuid', type: LogType.info);
+      }
+
+      return uuid;
+    } catch (e) {
+      log('❌ Error al manejar UUID del dispositivo: $e', type: LogType.error);
+      // Fallback: generar UUID temporal (no persistente)
+      return const Uuid().v4();
+    }
+  }
+  Future<void> _guardarDatosUsuario(CrearFondoResponse response) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // ✅ VERIFICAR que los datos existen antes de guardar
+      if (response.usuario == null || response.usuario.id == null || response.usuario.nombre.isEmpty) {
+        throw Exception('Datos de usuario inválidos en la respuesta del servidor');
+      }
+
+      // Solo guardamos datos esenciales del usuario
+      Map<String, dynamic> userData = {
+        'userId': response.usuario.id.toString(),
+        'userName': response.usuario.nombre,
+        'fechaUltimoAcceso': DateTime.now().toIso8601String(),
+      };
+
+      log('💾 Guardando datos del usuario:', type: LogType.info);
+      log('   - User ID: ${userData['userId']}', type: LogType.info);
+      log('   - User Name: ${userData['userName']}', type: LogType.info);
+      log('   - Fecha: ${userData['fechaUltimoAcceso']}', type: LogType.info);
+
+      final success = await prefs.setString('userData', jsonEncode(userData));
+
+      if (!success) {
+        throw Exception('Error al escribir en SharedPreferences');
+      }
+
+      // ✅ VERIFICAR que se guardó correctamente
+      final verificacion = prefs.getString('userData');
+      if (verificacion == null) {
+        throw Exception('Verificación falló: datos no encontrados después de guardar');
+      }
+
+      log('✅ Datos de usuario guardados exitosamente', type: LogType.success);
+      log('   - Verificación: ${verificacion.substring(0, 50)}...', type: LogType.info);
+
+    } catch (e) {
+      log('❌ ERROR CRÍTICO al guardar datos del usuario: $e', type: LogType.error);
+
+      // Mostrar error al usuario
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Text("⚠️", style: TextStyle(fontSize: 16)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Error al guardar datos: $e",
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+
+      // Re-lanzar la excepción para que el caller lo sepa
+      rethrow;
+    }
+  }
   Future<void> _crearFondo() async {
-    final nombreUsuario = _nombreUsuarioController.text.trim();
+    final nombreUsuario = _nombreUsuario ?? _nombreUsuarioController.text.trim();
     final nombreFondo = _nombreFondoController.text.trim();
 
     if (nombreUsuario.isEmpty || nombreFondo.isEmpty) {
-      setState(() => _error = "¡Hey! Rellena todo para ser el líder 👑");
-      _shakeController.forward().then((_) => _shakeController.reverse());
+      _mostrarError("¡Hey! Rellena todo para ser el líder 👑");
       return;
     }
 
@@ -90,202 +216,345 @@ class _CrearFondoPageState extends State<CrearFondoPage>
       _cargando = true;
     });
 
-    final url = Uri.parse('http://localhost:8080/api/fondos/crear');
+    try {
+      final uuid = await _getOrCreateUuidDispositivo();
 
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        "nombreUsuario": nombreUsuario,
-        "nombreFondo": nombreFondo,
-      }),
-    );
+      CrearFondoRequest request = CrearFondoRequest(
+        nombreUsuario: nombreUsuario,
+        nombreFondo: nombreFondo,
+        uuidDispositivo: uuid,
+      );
 
-    setState(() => _cargando = false);
+      log('🚀 Enviando request para crear fondo: $request', type: LogType.api);
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final codigo = data['fondo']['codigo'];
+      CrearFondoResponse response = await _apiService.crearFondo(request);
 
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => Dialog(
-          shape: RoundedRectangleBorder(
+      log('✅ Respuesta recibida del servidor:', type: LogType.success);
+      log('   - Fondo ID: ${response.fondo.id}', type: LogType.info);
+      log('   - Fondo nombre: ${response.fondo.nombre}', type: LogType.info);
+      log('   - Usuario ID: ${response.usuario.id}', type: LogType.info);
+      log('   - Usuario nombre: ${response.usuario.nombre}', type: LogType.info);
+
+      // ✅ IMPORTANTE: Guardar datos del usuario ANTES de mostrar el diálogo
+      await _guardarDatosUsuario(response);
+
+      setState(() => _cargando = false);
+
+      _mostrarDialogExito(response.fondo, nombreFondo);
+
+    } catch (e) {
+      setState(() => _cargando = false);
+      final mensaje = e.toString().contains('409') || e.toString().contains('400')
+          ? "Ese nombre ya está pillado! 😅 Prueba otro"
+          : "Algo ha petado 💥 ¡Inténtalo otra vez!";
+      _mostrarError(mensaje);
+      log('💥 Error al crear fondo: $e', type: LogType.error);
+    }
+  }
+
+
+
+  void _mostrarError(String mensaje) {
+    setState(() => _error = mensaje);
+    _shakeController.forward().then((_) => _shakeController.reverse());
+  }
+
+
+  // ✅ MÉTODO ACTUALIZADO: _mostrarDialogExito con botón de compartir
+
+  void _mostrarDialogExito(Fondo fondo, String nombreFondo) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(30),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(30),
-          ),
-          child: Container(
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(30),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.purple.shade400,
-                  Colors.pink.shade400,
-                  Colors.orange.shade300,
-                ],
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        spreadRadius: 5,
-                        blurRadius: 15,
-                      ),
-                    ],
-                  ),
-                  child: const Text(
-                    "👑",
-                    style: TextStyle(fontSize: 60),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  "¡ERES EL BOSS! 🔥",
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  "Squad '$nombreFondo' creado con éxito! 🎊",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.3),
-                      width: 2,
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        "Comparte este código con tu crew:",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(15),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              spreadRadius: 2,
-                              blurRadius: 8,
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              codigo,
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.purple.shade700,
-                                letterSpacing: 2,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            GestureDetector(
-                              onTap: () {
-                                Clipboard.setData(ClipboardData(text: codigo));
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text("¡Código copiado! 📋✨"),
-                                    backgroundColor: Colors.green.shade600,
-                                    behavior: SnackBarBehavior.floating,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(15),
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.purple.shade100,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  Icons.copy,
-                                  color: Colors.purple.shade700,
-                                  size: 20,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.purple.shade700,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 40,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                    elevation: 8,
-                  ),
-                  child: const Text(
-                    "¡Vamos allá! 🚀",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 18,
-                    ),
-                  ),
-                ),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.purple.shade400,
+                Colors.pink.shade400,
+                Colors.orange.shade300,
               ],
             ),
           ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      spreadRadius: 5,
+                      blurRadius: 15,
+                    ),
+                  ],
+                ),
+                child: const Text(
+                  "👑",
+                  style: TextStyle(fontSize: 60),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                "¡ERES EL BOSS! 🔥",
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Squad '$nombreFondo' creado con éxito! 🎊",
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.3),
+                    width: 2,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      "Código del fondo:",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(15),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            spreadRadius: 2,
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            fondo.codigo.toString(),
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.purple.shade700,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          GestureDetector(
+                            onTap: () {
+                              Clipboard.setData(ClipboardData(text: fondo.codigo.toString()));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: const Text("¡ID copiado! 📋✨"),
+                                  backgroundColor: Colors.green.shade600,
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(15),
+                                  ),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.purple.shade100,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                Icons.copy,
+                                color: Colors.purple.shade700,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // ✅ NUEVO: Botones de acción (Compartir + Vamos allá)
+              Column(
+                children: [
+                  // Botón Compartir
+                  Container(
+                    width: double.infinity,
+                    height: 50,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: ElevatedButton(
+                      onPressed: () => _compartirCodigo(fondo, nombreFondo),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                        foregroundColor: Colors.white,
+                        side: BorderSide(color: Colors.white.withOpacity(0.4), width: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text("📤", style: TextStyle(fontSize: 16)),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            "Compartir código",
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text("📱", style: TextStyle(fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Botón Vamos allá (principal)
+                  Container(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Cerrar dialog
+
+                        // Navegación para crear fondo: Preservar solo InicioPage en el stack
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => HomeFondoPage(
+                              fondo: fondo, // Pasamos el objeto fondo completo
+                            ),
+                          ),
+                          // Preservar solo InicioPage en el stack
+                              (route) => route.settings.name == '/' || route.toString().contains('InicioPage'),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.purple.shade700,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 40,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: 8,
+                      ),
+                      child: const Text(
+                        "¡Vamos allá! 🚀",
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+// ✅ NUEVO: Método para compartir el código del fondo
+  void _compartirCodigo(Fondo fondo, String nombreFondo) async {
+    try {
+      final mensaje = '''🎒✈️ ¡Únete a mi squad de viaje!
+
+🎯 Fondo: $nombreFondo
+🔑 Código: ${fondo.codigo}
+
+¡Descárgate FondosViajeros y únete usando este código! Vamos a hacer realidad esta aventura juntos 🌟
+
+#SquadGoals #ViajeEnGrupo #FondosViajeros''';
+
+      // Usar el paquete share_plus para compartir
+      await Share.share(
+        mensaje,
+        subject: '¡Únete a mi fondo de viaje: $nombreFondo!',
       );
-    } else if (response.statusCode == 409 || response.statusCode == 400) {
-      setState(() => _error = "Ese nombre ya está pillado! 😅 Prueba otro");
-      _shakeController.forward().then((_) => _shakeController.reverse());
-    } else {
-      setState(() => _error = "Algo ha petado 💥 ¡Inténtalo otra vez!");
-      _shakeController.forward().then((_) => _shakeController.reverse());
+
+      // Log para debugging
+      log('📤 Código compartido: ${fondo.codigo}', type: LogType.info);
+
+    } catch (e) {
+      log('❌ Error al compartir: $e', type: LogType.error);
+
+      // Fallback: copiar al portapapeles
+      Clipboard.setData(ClipboardData(text: fondo.codigo.toString()));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Text("📋", style: TextStyle(fontSize: 16)),
+                SizedBox(width: 8),
+                Text(
+                  "Código copiado al portapapeles",
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.blue.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
     }
   }
 
@@ -413,12 +682,24 @@ class _CrearFondoPageState extends State<CrearFondoPage>
                           animation: _shakeAnimation,
                           builder: (context, child) {
                             return Transform.translate(
-                              offset: _error != null
-                                  ? Offset(_shakeAnimation.value, 0)
-                                  : Offset.zero,
+                              offset: _error != null ? Offset(_shakeAnimation.value, 0) : Offset.zero,
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  // 👋 Saludo si ya existe usuario
+                                  if (_nombreUsuario != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 20.0),
+                                      child: Text(
+                                        'Hey $_nombreUsuario 👋',
+                                        style: const TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+
                                   // Título del formulario
                                   Center(
                                     child: Column(
@@ -445,73 +726,78 @@ class _CrearFondoPageState extends State<CrearFondoPage>
                                   ),
                                   const SizedBox(height: 20),
 
-                                  // Campo nombre de usuario
-                                  const Text(
-                                    "¿Cómo te llamas, líder? 😎",
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.black87,
+                                  // 👤 Campo nombre de usuario solo si no está cargado
+                                  if (_nombreUsuario == null) ...[
+                                    const Text(
+                                      "¿Cómo te llamas, líder? 😎",
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black87,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(18),
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Colors.indigo.shade50,
-                                          Colors.purple.shade50,
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(18),
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Colors.indigo.shade50,
+                                            Colors.purple.shade50,
+                                          ],
+                                        ),
+                                        border: Border.all(
+                                          color: Colors.indigo.shade200,
+                                          width: 2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.indigo.withOpacity(0.1),
+                                            spreadRadius: 1,
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 4),
+                                          ),
                                         ],
                                       ),
-                                      border: Border.all(
-                                        color: Colors.indigo.shade200,
-                                        width: 2,
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.indigo.withOpacity(0.1),
-                                          spreadRadius: 1,
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 4),
+                                      child: TextField(
+                                        controller: _nombreUsuarioController,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.black87,
                                         ),
-                                      ],
-                                    ),
-                                    child: TextField(
-                                      controller: _nombreUsuarioController,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      decoration: InputDecoration(
-                                        hintText: "Tu nombre de boss 👑",
-                                        hintStyle: TextStyle(
-                                          color: Colors.grey.shade500,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        border: InputBorder.none,
-                                        contentPadding: const EdgeInsets.all(16),
-                                        prefixIcon: Container(
-                                          margin: const EdgeInsets.all(12),
-                                          padding: const EdgeInsets.all(10),
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              colors: [
-                                                Colors.indigo.shade400,
-                                                Colors.purple.shade400,
-                                              ],
+                                        decoration: InputDecoration(
+                                          hintText: "Tu nombre de boss 👑",
+                                          hintStyle: TextStyle(
+                                            color: Colors.grey.shade500,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.all(16),
+                                          prefixIcon: Container(
+                                            margin: const EdgeInsets.all(12),
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                colors: [
+                                                  Colors.indigo.shade400,
+                                                  Colors.purple.shade400,
+                                                ],
+                                              ),
+                                              borderRadius: BorderRadius.circular(12),
                                             ),
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: const Text(
-                                            "🎯",
-                                            style: TextStyle(fontSize: 18),
+                                            child: const Text(
+                                              "🎯",
+                                              style: TextStyle(fontSize: 18),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 20),
+                                    const SizedBox(height: 20),
+                                  ],
+
+
 
                                   // Campo nombre del fondo
                                   const Text(
@@ -550,6 +836,7 @@ class _CrearFondoPageState extends State<CrearFondoPage>
                                       style: const TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
                                       ),
                                       decoration: InputDecoration(
                                         hintText: "Ej: Viaje a Bali 2025 🏝️",
@@ -754,4 +1041,5 @@ class _CrearFondoPageState extends State<CrearFondoPage>
       ),
     );
   }
+
 }
